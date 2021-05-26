@@ -38,6 +38,7 @@
 #include "server/zone/objects/scene/components/ContainerComponent.h"
 #include "server/zone/objects/scene/components/LuaContainerComponent.h"
 #include "server/zone/objects/ship/ShipObject.h"
+#include "server/zone/objects/scene/SceneObjectType.h"
 //#include "PositionUpdateTask.h"
 
 #include "variables/ContainerPermissions.h"
@@ -1015,7 +1016,17 @@ SceneObject* SceneObjectImplementation::getRootParentUnsafe() {
 	return static_cast<SceneObject*>(QuadTreeEntryImplementation::getRootParentUnsafe());
 }
 
-void SceneObjectImplementation::updateSavedRootParentRecursive(SceneObject* newRoot) {
+void SceneObjectImplementation::updateSavedRootParentRecursive(SceneObject* newRoot, int maxDepth) {
+	if (maxDepth <= 0) {
+		StringBuffer msg;
+
+		msg << "maxDepth reached in updateSavedRootParentRecursive("
+			<< getObjectID() << ") newRoot = "
+		    << (newRoot == nullptr ? 0 : newRoot->getObjectID())
+		;
+		throw Exception(msg.toString());
+	}
+
 	Locker locker(&parentLock);
 
 	if (newRoot == asSceneObject())
@@ -1029,13 +1040,13 @@ void SceneObjectImplementation::updateSavedRootParentRecursive(SceneObject* newR
 		for (int j = 0; j < getContainerObjectsSize(); ++j) {
 			ManagedReference<SceneObject*> object = getContainerObject(j);
 
-			object->updateSavedRootParentRecursive(newRoot);
+			object->updateSavedRootParentRecursive(newRoot, maxDepth - 1);
 		}
 
 		for (int i = 0; i < getSlottedObjectsSize(); ++i) {
 			ManagedReference<SceneObject*> object = getSlottedObject(i);
 
-			object->updateSavedRootParentRecursive(newRoot);
+			object->updateSavedRootParentRecursive(newRoot, maxDepth - 1);
 		}
 	}
 }
@@ -2130,4 +2141,8 @@ void SceneObjectImplementation::getChildrenRecursive(SortedVector<uint64>& child
 			obj->getChildrenRecursive(childObjectsFound, maxDepth - 1, pruneCreo, pruneCraftedComponents);
 		}
 	}
+}
+
+String SceneObjectImplementation::getGameObjectTypeStringID() {
+	return SceneObjectType::typeToString(gameObjectType);
 }

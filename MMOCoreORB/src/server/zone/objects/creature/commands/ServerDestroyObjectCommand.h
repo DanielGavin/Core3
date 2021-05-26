@@ -118,7 +118,7 @@ public:
 								Locker adkLocker(adk);
 								adk->setUsed(false);
 
-								TransactionLog trxADK(object, creature, adk, TrxCode::SERVERDESTROYOBJECT);
+								TransactionLog trxADK(object, creature, adk, TrxCode::ADKREMOVE);
 								trxADK.groupWith(trx);
 
 								inventory->transferObject(adk, -1, false);
@@ -144,11 +144,17 @@ public:
 	}
 
 	void destroyObject(SceneObject* object, CreatureObject* creature) const {
-		object->destroyObjectFromWorld(true);
+		if (creature != nullptr) {
+			StringIdChatParameter message("shared", "rsp_object_deleted_prose"); //You have destroyed %TT (%TO).
 
+			message.setTT(object->getDisplayedName());
+			message.setTO(object->getGameObjectTypeStringID());
+			creature->sendSystemMessage(message);
+		}
+
+		object->destroyObjectFromWorld(true);
 		object->destroyObjectFromDatabase(true);
 	}
-
 };
 
 #endif //SERVERDESTROYOBJECTCOMMAND_H_

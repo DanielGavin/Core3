@@ -26,6 +26,7 @@
 #include "server/zone/packets/player/PlayerObjectDeltaMessage3.h"
 #include "server/zone/packets/player/PlayerObjectDeltaMessage8.h"
 #include "server/zone/packets/player/PlayerObjectDeltaMessage9.h"
+#include "server/zone/packets/creature/CreatureObjectDeltaMessage6.h"
 #include "server/zone/packets/chat/ChatOnGetFriendsList.h"
 #include "server/zone/packets/chat/ChatOnGetIgnoreList.h"
 #include "server/zone/packets/chat/ChatOnAddFriend.h"
@@ -258,8 +259,6 @@ void PlayerObjectImplementation::unload() {
 	MissionManager* missionManager = creature->getZoneServer()->getMissionManager();
 	missionManager->deactivateMissions(creature);
 
-	notifyOffline();
-
 	if (creature->isRidingMount()) {
 		creature->executeObjectControllerAction(STRING_HASHCODE("dismount"));
 	}
@@ -364,6 +363,7 @@ void PlayerObjectImplementation::sendBaselinesTo(SceneObject* player) {
 void PlayerObjectImplementation::notifySceneReady() {
 	teleporting = false;
 	onLoadScreen = false;
+	forcedTransform = false;
 
 	BaseMessage* msg = new CmdSceneReady();
 	sendMessage(msg);
@@ -1379,6 +1379,22 @@ void PlayerObjectImplementation::notifyOnline() {
 		}
 	}
 
+	if (playerCreature->isInGuild()) {
+		ManagedReference<GuildObject*> guild = playerCreature->getGuildObject().get();
+		uint64 playerId = playerCreature->getObjectID();
+
+		if (guild != nullptr && !guild->hasMember(playerId)) {
+			playerCreature->setGuildObject(nullptr);
+
+			CreatureObjectDeltaMessage6* creod6 = new CreatureObjectDeltaMessage6(playerCreature);
+			creod6->updateGuildID();
+			creod6->close();
+			playerCreature->broadcastMessage(creod6, true);
+
+			updateInRangeBuildingPermissions();
+		}
+	}
+
 	if (getForcePowerMax() > 0 && getForcePower() < getForcePowerMax())
 		activateForcePowerRegen();
 
@@ -2100,6 +2116,8 @@ void PlayerObjectImplementation::setLinkDead(bool isSafeLogout) {
 
 	activateRecovery();
 
+	notifyOffline();
+
 	creature->clearQueueActions(false);
 }
 
@@ -2173,7 +2191,6 @@ void PlayerObjectImplementation::disconnect(bool closeClient, bool doLock) {
 		info ("disconnecting player");
 
 		unload();
-
 		setOffline();
 	}
 

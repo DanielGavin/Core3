@@ -89,6 +89,7 @@
 #include "templates/params/PaletteColorCustomizationVariable.h"
 #include "templates/appearance/PaletteTemplate.h"
 #include "server/zone/managers/auction/AuctionSearchTask.h"
+#include "server/zone/objects/tangible/Instrument.h"
 
 float CreatureObjectImplementation::DEFAULTRUNSPEED = 5.376f;
 
@@ -143,8 +144,8 @@ void CreatureObjectImplementation::initializeMembers() {
 	groupInviteCounter = 0;
 	targetID = 0;
 	moodID = 0;
-	performanceCounter = 0;
-	instrumentID = 0;
+	performanceStartTime = 0;
+	performanceType = 0;
 
 	optionsBitmask = 0x80;
 
@@ -542,17 +543,15 @@ void CreatureObjectImplementation::setLevel(int level, bool randomHam) {
 	}
 }
 
-void CreatureObjectImplementation::setInstrumentID(int instrumentid,
-		bool notifyClient) {
-	if (instrumentid == instrumentID)
+void CreatureObjectImplementation::setPerformanceType(int type, bool notifyClient) {
+	if (type == performanceType)
 		return;
 
-	instrumentID = instrumentid;
+	performanceType = type;
 
 	if (notifyClient) {
-		CreatureObjectDeltaMessage6* msg = new CreatureObjectDeltaMessage6(
-				asCreatureObject());
-		msg->updateInstrumentID(instrumentID);
+		CreatureObjectDeltaMessage6* msg = new CreatureObjectDeltaMessage6(asCreatureObject());
+		msg->updatePerformanceType(performanceType);
 		msg->close();
 
 		broadcastMessage(msg, true);
@@ -691,25 +690,43 @@ void CreatureObjectImplementation::addMountedCombatSlow() {
 void CreatureObjectImplementation::removeMountedCombatSlow(bool showEndMessage) {
 	ManagedReference<CreatureObject*> creo = asCreatureObject();
 	ManagedReference<CreatureObject*> vehicle = getParent().get().castTo<CreatureObject*>();
-	if (vehicle == nullptr)
-		return;
 
-	Core::getTaskManager()->executeTask([=] () {
-		Locker locker(vehicle);
+	constexpr uint32 buffCRC = "mounted_combat_slow"_hashCode;
 
-		constexpr uint32 buffCRC = "mounted_combat_slow"_hashCode;
+	if (vehicle != nullptr) {
+		Core::getTaskManager()->executeTask([=] () {
+			Locker locker(vehicle);
 
-		bool hasBuff = vehicle->hasBuff(buffCRC);
+			bool hasBuff = vehicle->hasBuff(buffCRC);
 
-		if (hasBuff) {
-			vehicle->removeBuff(buffCRC);
-			if (showEndMessage) {
-				//I don't think we want to show this on dismount, or after a gallop
-				StringIdChatParameter endStringId("combat_effects", "mount_speed_after_combat"); // Your mount speeds up.
-				creo->sendSystemMessage(endStringId);
+			if (hasBuff) {
+				vehicle->removeBuff(buffCRC);
+				if (showEndMessage) {
+					//I don't think we want to show this on dismount, or after a gallop
+					StringIdChatParameter endStringId("combat_effects", "mount_speed_after_combat"); // Your mount speeds up.
+					creo->sendSystemMessage(endStringId);
+				}
+			}
+		}, "RemoveMountedCombatSlowLambda");
+	}
+
+	Reference<PlayerObject*> ghost = getPlayerObject();
+
+	if (ghost != nullptr) {
+		for (int i = 0; i < ghost->getActivePetsSize(); i++) {
+			ManagedReference<AiAgent*> pet = ghost->getActivePet(i);
+
+			if (pet != nullptr) {
+				Core::getTaskManager()->executeTask([=] () {
+					Locker plocker(pet);
+
+			 		if (pet->isMount() && pet->hasBuff(buffCRC)) {
+						pet->removeBuff(buffCRC);
+					}
+				}, "RemovePetMountSlowLambda");
 			}
 		}
-	}, "RemoveMountedCombatSlowLambda");
+	}
 }
 
 void CreatureObjectImplementation::setCombatState() {
@@ -1766,18 +1783,19 @@ void CreatureObjectImplementation::setMoodString(
 	}
 }
 
-void CreatureObjectImplementation::setPerformanceCounter(int counter,
-		bool notifyClient) {
-	if (performanceCounter == counter)
+void CreatureObjectImplementation::setPerformanceStartTime(int time, bool notifyClient) {
+	// This value doesn't seem to be used by the client.
+
+	if (performanceStartTime == time)
 		return;
 
-	performanceCounter = counter;
+	performanceStartTime = time;
 
 	if (!notifyClient)
 		return;
 
 	CreatureObjectDeltaMessage6* codm4 = new CreatureObjectDeltaMessage6(asCreatureObject());
-	codm4->updatePerformanceCounter(counter);
+	codm4->updatePerformanceStartTime(time);
 	codm4->close();
 	broadcastMessage(codm4, true);
 }
@@ -1797,8 +1815,7 @@ void CreatureObjectImplementation::setListenToID(uint64 id, bool notifyClient) {
 	sendMessage(codm4);
 }
 
-void CreatureObjectImplementation::setPerformanceAnimation(
-		const String& animation, bool notifyClient) {
+void CreatureObjectImplementation::setPerformanceAnimation(const String& animation, bool notifyClient) {
 	if (performanceAnimation == animation)
 		return;
 
@@ -1959,6 +1976,9 @@ void CreatureObjectImplementation::activateQueueAction() {
 
 	ManagedReference<ObjectController*> objectController = getZoneServer()->getObjectController();
 
+	nextAction.updateToCurrentTime();
+	nextAction.addMiliTime(1000);
+
 	float time = objectController->activateCommand(asCreatureObject(), action->getCommand(), action->getActionCounter(), action->getTarget(), action->getArguments());
 
 	nextAction.updateToCurrentTime();
@@ -1968,8 +1988,13 @@ void CreatureObjectImplementation::activateQueueAction() {
 	}
 
 	// Remove element from queue after it has been executed in order to ensure that other commands are enqueued and not activated at immediately.
-	// Note clear queue action may remove itself as part of the action execution.
-	deleteQueueAction(action->getActionCounter());
+	for (int i = 0; i < commandQueue->size(); i++) {
+		Reference<CommandQueueAction*> actionToDelete = commandQueue->get(i);
+		if (action == actionToDelete) {
+			commandQueue->remove(i);
+			break;
+		}
+	}
 
 	if (commandQueue->size() != 0) {
 		Reference<CommandQueueActionEvent*> e = new CommandQueueActionEvent(asCreatureObject());
@@ -3211,6 +3236,10 @@ bool CreatureObjectImplementation::isHealableBy(CreatureObject* object) {
 	return true;
 }
 
+bool CreatureObjectImplementation::isInvulnerable()  {
+	return isPlayerCreature() && (getPvpStatusBitmask() & CreatureFlag::PLAYER) == 0;
+}
+
 bool CreatureObjectImplementation::hasBountyMissionFor(CreatureObject* target) {
 	if (target == nullptr)
 		return false;
@@ -3924,6 +3953,34 @@ void CreatureObjectImplementation::setHue(int hueIndex) {
 	}
 
 	hueValue = hueIndex;
+}
+
+Instrument* CreatureObjectImplementation::getPlayableInstrument() {
+	Reference<Instrument*> instrument = getSlottedObject("hold_r").castTo<Instrument*> ();
+
+	if (instrument == nullptr) {
+		ZoneServer* zoneServer = getZoneServer();
+
+		if (zoneServer == nullptr)
+			return nullptr;
+
+		ManagedReference<SceneObject*> target = zoneServer->getObject(targetID);
+
+		if (target == nullptr || getParentID() != target->getParentID() || !isInRange(target, 3))
+			return nullptr;
+
+		instrument = cast<Instrument*> (target.get());
+
+		if (instrument == nullptr)
+			return nullptr;
+
+		ManagedReference<CreatureObject*> spawnerPlayer = instrument->getSpawnerPlayer().get();
+
+		if (spawnerPlayer == nullptr || spawnerPlayer != asCreatureObject())
+			return nullptr;
+	}
+
+	return instrument;
 }
 
 void CreatureObjectImplementation::setClient(ZoneClientSession* cli) {

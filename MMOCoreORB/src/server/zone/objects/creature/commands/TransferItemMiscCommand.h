@@ -153,6 +153,18 @@ public:
 			}
 		}
 
+		// Check for any parent that is containerType == NONE
+		for (auto parent = objectToTransfer->getParent().get(); parent != nullptr; parent = parent->getParent().get()) {
+			Locker lock(parent);
+
+			if (parent->getContainerType() == ContainerType::NONE) {
+				creature->error() << "Trying to remove object from containerType==NONE: oid " << parent->getObjectID();
+				trx.abort() << "Attempted to transfer from containerType == NONE";
+				creature->sendSystemMessage("@error_message:perm_no_move");
+				return GENERALERROR;
+			}
+		}
+
 		Zone* zoneObject = objectToTransfer->getZone();
 
 		if (zoneObject != nullptr) {
@@ -250,7 +262,7 @@ public:
 
 		bool notifyLooted = (objectToTransfer->getParentRecursively(SceneObjectType::CREATURE) != nullptr || objectToTransfer->getParentRecursively(SceneObjectType::NPCCREATURE) != nullptr);
 
-		bool notifyContainerContentsChanged = (objectToTransfer->getParentRecursively(SceneObjectType::STATICLOOTCONTAINER) != nullptr);
+		bool notifyContainerContentsChanged = (objectToTransfer->getParentRecursively(SceneObjectType::STATICLOOTCONTAINER) != nullptr || (objectToTransfer->getParentRecursively(SceneObjectType::CONTAINER)) != nullptr);
 
 		Locker clocker(objectsParent, creature);
 
@@ -284,4 +296,3 @@ public:
 };
 
 #endif //TRANSFERITEMMISCCOMMAND_H_
-
