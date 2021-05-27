@@ -163,7 +163,7 @@ void PlanetManagerImplementation::loadLuaConfig() {
             float z = launchLocation.getFloatAt(4);
             jtlLaunchLocation = Vector3(x, y, z);
             launchLocation.pop();
-        } catch (Exception e) {
+        } catch (const Exception& e) {
             error(e.getMessage());
         }
 
